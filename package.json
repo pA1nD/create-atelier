@@ -1,0 +1,36 @@
+{
+  "name": "@pa1nd/create-atelier",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Scaffold a new Atelier instance: `npm create @pa1nd/atelier my-studio`. Writes a tiny instance that depends on @pa1nd/atelier — the shell runs itself from node_modules, nothing vendored.",
+  "bin": {
+    "create-atelier": "index.js"
+  },
+  "files": [
+    "index.js"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "author": "pA1nD",
+  "homepage": "https://github.com/pA1nD/create-atelier#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pA1nD/create-atelier.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pA1nD/create-atelier/issues"
+  },
+  "keywords": [
+    "atelier",
+    "create-atelier",
+    "scaffold",
+    "generator",
+    "app-shell",
+    "starter"
+  ]
+}
