@@ -8,12 +8,14 @@
  * (the shell arrives from npm — nothing is vendored), a config, a .gitignore,
  * and a README. Then it prints the commands to run it.
  *
- * Starter modules: --chrome downloads a chrome module and sets it as the
- * instance's defaultChrome; --add (repeatable) downloads any other module.
- * A <spec> is anything `npm pack` accepts — a registry name, a git url, a
- * tarball url, or a local folder. Each lands as a plain folder in the
- * instance (the folder name is the module id); nothing is vendored into the
- * scaffolder itself.
+ * Starter kits & modules: --kit pulls a whole kit repo of modules (chrome
+ * included, auto-detected); --chrome downloads one chrome module and sets it
+ * as the instance's defaultChrome; --add (repeatable) downloads any other
+ * module. A bare name resolves against the kit repo (default:
+ * github.com/pA1nD/atelier-modules); any other <spec> is handed to
+ * `npm pack` — a registry name, a git url, a tarball url, or a local folder.
+ * Each lands as a plain folder in the instance (the folder name is the
+ * module id); nothing is vendored into the scaffolder itself.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -29,13 +31,17 @@ function fail(msg) {
 
 const [target, ...flags] = process.argv.slice(2)
 if (!target || target.startsWith('-')) {
-  fail(`usage: npm create @pa1nd/atelier <dir> [-- --chrome <spec>] [--add <spec>]…
+  fail(`usage: npm create @pa1nd/atelier <dir> [-- --kit <kit>] [--chrome <spec>] [--add <spec>]…
   e.g.  npm create @pa1nd/atelier my-studio
-        npm create @pa1nd/atelier my-studio -- --chrome @pa1nd/atelier-chrome --add github:someone/kanban
-  <spec> is anything npm can fetch: a registry name, git url, tarball url, or local folder.`)
+        npm create @pa1nd/atelier my-studio -- --kit atelier-modules
+        npm create @pa1nd/atelier my-studio -- --chrome atelier-chrome --add dock
+  --kit pulls every module of a kit repo (a bare kit name means pA1nD/<kit>).
+  a bare <spec> names one folder of the kit repo (default pA1nD/atelier-modules);
+  anything else (registry name, git url, tarball url, local folder) is fetched via npm.`)
 }
 
 let chromeSpec = null
+let kitSpec = null
 const addSpecs = []
 for (let i = 0; i < flags.length; i++) {
   if (flags[i] === '--chrome') {
@@ -43,6 +49,9 @@ for (let i = 0; i < flags.length; i++) {
     chromeSpec = flags[++i] || fail('--chrome needs a <spec>')
   } else if (flags[i] === '--add') {
     addSpecs.push(flags[++i] || fail('--add needs a <spec>'))
+  } else if (flags[i] === '--kit') {
+    if (kitSpec) fail('only one --kit')
+    kitSpec = flags[++i] || fail('--kit needs a kit name (e.g. atelier-modules) or owner/repo')
   } else {
     fail(`unknown option: ${flags[i]}`)
   }
@@ -57,18 +66,75 @@ if (fs.existsSync(dir) && fs.readdirSync(dir).length > 0) {
   fail(`refusing to scaffold into a non-empty directory: ${dir}`)
 }
 
-/* ---- starter modules (--chrome / --add) ------------------------------------
+/* ---- starter kits & modules (--kit / --chrome / --add) ----------------------
  * Fetched BEFORE anything is written, so a bad spec fails with the target
- * directory untouched. `npm pack` resolves the spec (registry / git / tarball /
- * folder) to a tarball in a temp dir; it's extracted there and later copied
- * into the instance under the package's name with the scope stripped — the
- * folder name is the module id.
+ * directory untouched.
+ *
+ * A KIT is a github repo of module folders (the first one:
+ * github.com/pA1nD/atelier-modules). --kit pulls EVERY module it lists — its
+ * `.atelier/marketplace.json` manifest if present, else every visible folder —
+ * and auto-detects its chrome for `defaultChrome`. A bare --kit name expands
+ * to pA1nD/<name>; `owner/repo` names any other kit.
+ *
+ * A bare --chrome/--add name is a single folder of the kit repo (the default
+ * kit when no --kit is given). Any other spec goes to `npm pack` (registry /
+ * git / tarball / folder), extracted in a temp dir. Either way the module is
+ * later copied into the instance under its name with the scope stripped —
+ * the folder name is the module id.
  */
+const KIT_OWNER = 'pA1nD'
+const DEFAULT_KIT_REPO = 'pA1nD/atelier-modules'
+const kitRepo = kitSpec ? (kitSpec.includes('/') ? kitSpec : `${KIT_OWNER}/${kitSpec}`) : null
+const bareNameRepo = kitRepo || DEFAULT_KIT_REPO
+const isBareName = (s) => /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(s)
+
 const runNpm = (args, opts = {}) => process.env.npm_execpath
   ? execFileSync(process.execPath, [process.env.npm_execpath, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts })
   : execFileSync('npm', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts })
 
-function fetchModule(spec) {
+const readPkg = (dir) => {
+  try { return JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) } catch { return {} }
+}
+const hasDeps = (dir) => {
+  const pkg = readPkg(dir)
+  return !!(pkg.dependencies && Object.keys(pkg.dependencies).length)
+}
+// A chrome declares itself in its own frontend.jsx meta — that's the marker.
+const isChromeModule = (dir) => {
+  try { return /isChrome\s*:\s*true/.test(fs.readFileSync(path.join(dir, 'frontend.jsx'), 'utf8')) } catch { return false }
+}
+
+const repoRoots = new Map()   // repo → extracted tarball root, downloaded once
+async function fetchRepoRoot(repo) {
+  if (repoRoots.has(repo)) return repoRoots.get(repo)
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'create-atelier-repo-'))
+  const url = `https://codeload.github.com/${repo}/tar.gz/HEAD`
+  const res = await fetch(url).catch((e) => fail(`could not reach github.com for ${repo}: ${e.message}`))
+  if (!res.ok) fail(`could not download github.com/${repo} (HTTP ${res.status}) — is it a public repo?`)
+  fs.writeFileSync(path.join(tmp, 'repo.tgz'), Buffer.from(await res.arrayBuffer()))
+  const out = path.join(tmp, 'repo')
+  fs.mkdirSync(out)
+  execFileSync('tar', ['-xzf', path.join(tmp, 'repo.tgz'), '-C', out])
+  const root = path.join(out, fs.readdirSync(out)[0])   // single "<repo>-<ref>" top dir
+  repoRoots.set(repo, root)
+  return root
+}
+
+const repoModuleDirs = (root) => fs.readdirSync(root, { withFileTypes: true })
+  .filter((d) => d.isDirectory() && /^[a-zA-Z0-9]/.test(d.name))
+  .map((d) => d.name)
+
+async function fetchFromRepo(repo, name) {
+  const root = await fetchRepoRoot(repo)
+  const src = path.join(root, name)
+  if (!fs.existsSync(src)) {
+    fail(`no module "${name}" in github.com/${repo} — available: ${repoModuleDirs(root).join(', ') || '(none)'}`)
+  }
+  return { spec: name, src, id: name, hasDeps: hasDeps(src) }
+}
+
+async function fetchModule(spec) {
+  if (isBareName(spec)) return fetchFromRepo(bareNameRepo, spec)
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'create-atelier-'))
   let tgz
   try {
@@ -80,15 +146,39 @@ function fetchModule(spec) {
   const src = path.join(tmp, 'extracted')
   fs.mkdirSync(src)
   execFileSync('tar', ['-xzf', path.join(tmp, tgz), '-C', src, '--strip-components', '1'])
-  let pkg = {}
-  try { pkg = JSON.parse(fs.readFileSync(path.join(src, 'package.json'), 'utf8')) } catch {}
-  const id = (pkg.name || tgz.replace(/\.tgz$/, '')).split('/').pop()
-  return { spec, src, id, hasDeps: !!(pkg.dependencies && Object.keys(pkg.dependencies).length) }
+  const id = (readPkg(src).name || tgz.replace(/\.tgz$/, '')).split('/').pop()
+  return { spec, src, id, hasDeps: hasDeps(src) }
 }
 
 const starters = []
-if (chromeSpec) starters.push({ ...fetchModule(chromeSpec), isChrome: true })
-for (const s of addSpecs) starters.push(fetchModule(s))
+if (chromeSpec) starters.push({ ...(await fetchModule(chromeSpec)), isChrome: true })
+for (const s of addSpecs) starters.push(await fetchModule(s))
+
+// --kit: pull every module the kit lists (manifest first, folders as fallback).
+// Explicitly-named starters win a name collision; the kit's chrome becomes the
+// default chrome unless --chrome named one.
+if (kitRepo) {
+  const root = await fetchRepoRoot(kitRepo)
+  let kitIds = []
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, '.atelier', 'marketplace.json'), 'utf8'))
+    kitIds = (manifest.apps || []).map((a) => a.id)
+  } catch {}
+  if (!kitIds.length) kitIds = repoModuleDirs(root)
+  if (!kitIds.length) fail(`kit github.com/${kitRepo} contains no modules`)
+  const taken = new Set(starters.map((s) => s.id))
+  for (const id of kitIds) {
+    const src = path.join(root, id)
+    if (taken.has(id) || !fs.existsSync(src)) continue
+    starters.push({ spec: `${kitRepo}#${id}`, src, id, hasDeps: hasDeps(src), fromKit: true })
+  }
+  if (!chromeSpec) {
+    const kitChromes = starters.filter((s) => s.fromKit && isChromeModule(s.src))
+    if (kitChromes.length === 1) kitChromes[0].isChrome = true
+    // 0 or several: leave defaultChrome unset — the shell's election handles it
+  }
+}
+
 const ids = starters.map((s) => s.id)
 if (new Set(ids).size !== ids.length) {
   fail(`two starter modules resolve to the same folder name: ${ids.join(', ')}`)
