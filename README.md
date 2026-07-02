@@ -26,10 +26,10 @@ A **kit** is a github repo of module folders. Pull a whole one at scaffold time:
 npm create @pa1nd/atelier my-studio -- --kit atelier-modules
 ```
 
-Every module the kit lists (its `.atelier/marketplace.json` manifest, or simply
-every folder) lands in the instance, and the kit's chrome is detected and set as
-`defaultChrome` — the first `npm run dev` renders themed, modules included. A
-bare kit name means `pA1nD/<kit>` —
+Every module folder in the kit — same rule as Atelier's own discovery: a folder
+with a `frontend.jsx` or a `backend.js` — lands in the instance, and the kit's
+chrome is detected and set as `defaultChrome`: the first `npm run dev` renders
+themed, modules included. A bare kit name means `pA1nD/<kit>` —
 [`atelier-modules`](https://github.com/pA1nD/atelier-modules) is the first kit —
 and `owner/repo` names any other public repo shaped the same way.
 

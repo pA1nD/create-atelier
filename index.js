@@ -71,10 +71,10 @@ if (fs.existsSync(dir) && fs.readdirSync(dir).length > 0) {
  * directory untouched.
  *
  * A KIT is a github repo of module folders (the first one:
- * github.com/pA1nD/atelier-modules). --kit pulls EVERY module it lists — its
- * `.atelier/marketplace.json` manifest if present, else every visible folder —
- * and auto-detects its chrome for `defaultChrome`. A bare --kit name expands
- * to pA1nD/<name>; `owner/repo` names any other kit.
+ * github.com/pA1nD/atelier-modules). --kit pulls EVERY module folder in it —
+ * same rule as the shell's discovery: a folder with a frontend.jsx or a
+ * backend.js — and auto-detects its chrome for `defaultChrome`. A bare --kit
+ * name expands to pA1nD/<name>; `owner/repo` names any other kit.
  *
  * A bare --chrome/--add name is a single folder of the kit repo (the default
  * kit when no --kit is given). Any other spec goes to `npm pack` (registry /
@@ -120,9 +120,11 @@ async function fetchRepoRoot(repo) {
   return root
 }
 
+// A module folder, by the shell's own discovery rule: frontend.jsx or backend.js.
 const repoModuleDirs = (root) => fs.readdirSync(root, { withFileTypes: true })
   .filter((d) => d.isDirectory() && /^[a-zA-Z0-9]/.test(d.name))
   .map((d) => d.name)
+  .filter((n) => fs.existsSync(path.join(root, n, 'frontend.jsx')) || fs.existsSync(path.join(root, n, 'backend.js')))
 
 async function fetchFromRepo(repo, name) {
   const root = await fetchRepoRoot(repo)
@@ -154,22 +156,17 @@ const starters = []
 if (chromeSpec) starters.push({ ...(await fetchModule(chromeSpec)), isChrome: true })
 for (const s of addSpecs) starters.push(await fetchModule(s))
 
-// --kit: pull every module the kit lists (manifest first, folders as fallback).
-// Explicitly-named starters win a name collision; the kit's chrome becomes the
-// default chrome unless --chrome named one.
+// --kit: pull every module folder in the kit repo. Explicitly-named starters
+// win a name collision; the kit's chrome becomes the default chrome unless
+// --chrome named one.
 if (kitRepo) {
   const root = await fetchRepoRoot(kitRepo)
-  let kitIds = []
-  try {
-    const manifest = JSON.parse(fs.readFileSync(path.join(root, '.atelier', 'marketplace.json'), 'utf8'))
-    kitIds = (manifest.apps || []).map((a) => a.id)
-  } catch {}
-  if (!kitIds.length) kitIds = repoModuleDirs(root)
-  if (!kitIds.length) fail(`kit github.com/${kitRepo} contains no modules`)
+  const kitIds = repoModuleDirs(root)
+  if (!kitIds.length) fail(`kit github.com/${kitRepo} contains no modules (folders with a frontend.jsx or backend.js)`)
   const taken = new Set(starters.map((s) => s.id))
   for (const id of kitIds) {
+    if (taken.has(id)) continue
     const src = path.join(root, id)
-    if (taken.has(id) || !fs.existsSync(src)) continue
     starters.push({ spec: `${kitRepo}#${id}`, src, id, hasDeps: hasDeps(src), fromKit: true })
   }
   if (!chromeSpec) {
