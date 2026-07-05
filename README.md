@@ -9,9 +9,10 @@ npm install
 npm run dev            # → http://localhost:1844
 ```
 
-It writes a **tiny** instance — a `package.json` that depends on
+It writes a **tiny** instance — only what the instance needs: a `package.json`
+that depends on
 [`@pa1nd/atelier`](https://www.npmjs.com/package/@pa1nd/atelier), an
-`atelier.config.json`, a `.gitignore`, and a `README`. Nothing is vendored: the
+`atelier.config.json`, and a `.gitignore`. Nothing is vendored: the
 shell arrives from npm and runs itself from `node_modules`, so you update it with
 `npm update @pa1nd/atelier`.
 

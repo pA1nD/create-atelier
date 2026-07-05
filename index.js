@@ -4,9 +4,9 @@
  *   npm create @pa1nd/atelier <dir> [-- --chrome <spec>] [--add <spec>]…
  *   npx @pa1nd/create-atelier <dir> [--chrome <spec>] [--add <spec>]…
  *
- * It writes a *tiny* instance: a package.json that depends on @pa1nd/atelier
- * (the shell arrives from npm — nothing is vendored), a config, a .gitignore,
- * and a README. Then it prints the commands to run it.
+ * It writes a *tiny* instance — only what the instance needs: a package.json
+ * that depends on @pa1nd/atelier (the shell arrives from npm — nothing is
+ * vendored), a config, and a .gitignore. Then it prints the commands to run it.
  *
  * Starter kits & modules: --kit pulls a whole kit repo of modules (chrome
  * included, auto-detected); --chrome downloads one chrome module and sets it
@@ -242,11 +242,6 @@ for (const s of starters) {
   }
 }
 
-write('README.md', `# ${name}
-
-An [Atelier](https://theatelier.dev) instance — \`npm install && npm run dev\` → http://localhost:1844.
-Docs: https://theatelier.dev/docs
-`)
 
 const major = Number(process.versions.node.split('.')[0])
 const warn = Number.isFinite(major) && major < 24
