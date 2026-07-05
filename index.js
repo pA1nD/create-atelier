@@ -244,49 +244,8 @@ for (const s of starters) {
 
 write('README.md', `# ${name}
 
-An [Atelier](https://github.com/pA1nD/atelier) instance — a single runtime that
-hosts small feature modules around one shared chrome (theme).
-
-## Run
-
-\`\`\`sh
-npm install
-npm run dev            # → http://localhost:1844
-\`\`\`
-
-${chrome ? `The chrome \`${chrome.id}/\` came with the scaffold and is set as the
-\`defaultChrome\` in \`atelier.config.json\`. A chrome owns all the visuals
-(rail, fonts, colors, \`@atelier/kit\`); your modules render inside it.` : `Atelier ships **no chrome**, so the first screen says *"add a chrome"* — that's
-expected. A chrome owns all the visuals (rail, fonts, colors, \`@atelier/kit\`);
-add one and your modules render inside it.`}
-
-## Add a module
-
-A module is just a folder with a \`frontend.jsx\`:
-
-\`\`\`jsx
-// hello/frontend.jsx
-export default function Module() {
-  return <div className="p-8">hello</div>
-}
-\`\`\`
-
-Save it — it appears in the rail. See the
-[module docs](https://github.com/pA1nD/atelier/blob/main/docs/MODULES.md) for the
-full contract (\`ctx\`, the real-time WebSocket, \`@atelier/kit\`, workspaces).
-
-## Add modules
-
-\`\`\`sh
-npx atelier add <name>       # a module from this instance's marketplaces
-npx atelier add <spec>       # or any npm package / git url / tarball / local folder
-\`\`\`
-
-## Update the shell
-
-\`\`\`sh
-npm update @pa1nd/atelier
-\`\`\`
+An [Atelier](https://theatelier.dev) instance — \`npm install && npm run dev\` → http://localhost:1844.
+Docs: https://theatelier.dev/docs
 `)
 
 const major = Number(process.versions.node.split('.')[0])
