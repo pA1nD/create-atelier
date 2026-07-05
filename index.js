@@ -22,7 +22,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { execFileSync } from 'node:child_process'
 
-const ATELIER_RANGE = '^0.10.0'   // the shell version this scaffolder targets
+const ATELIER_RANGE = '^0.11.0'   // the shell version this scaffolder targets (0.11 ships `atelier add`)
 
 function fail(msg) {
   console.error(`create-atelier: ${msg}`)
@@ -208,6 +208,9 @@ write('atelier.config.json', JSON.stringify({
   label: name,
   port: 1844,
   ...(chrome ? { defaultChrome: chrome.id } : {}),
+  // the kit repo doubles as the instance's marketplace: `npx atelier add <name>`
+  // resolves bare module names against it (tooling-only — the server ignores it)
+  ...(kitRepo ? { marketplaces: [kitRepo] } : {}),
 }, null, 2) + '\n')
 
 write('.gitignore', 'node_modules\ndata\n.DS_Store\n')
@@ -259,6 +262,13 @@ export default function Module() {
 Save it — it appears in the rail. See the
 [module docs](https://github.com/pA1nD/atelier/blob/main/docs/MODULES.md) for the
 full contract (\`ctx\`, the real-time WebSocket, \`@atelier/kit\`, workspaces).
+
+## Add modules
+
+\`\`\`sh
+npx atelier add <name>       # a module from this instance's marketplaces
+npx atelier add <spec>       # or any npm package / git url / tarball / local folder
+\`\`\`
 
 ## Update the shell
 

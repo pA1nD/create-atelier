@@ -1,6 +1,6 @@
 {
   "name": "@pa1nd/create-atelier",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Scaffold a new Atelier instance: `npm create @pa1nd/atelier my-studio`. Writes a tiny instance that depends on @pa1nd/atelier — the shell runs itself from node_modules, nothing vendored.",
   "bin": {
