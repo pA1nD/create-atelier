@@ -22,7 +22,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { execFileSync } from 'node:child_process'
 
-const ATELIER_RANGE = '^0.12.0'   // the shell version this scaffolder targets (0.12: atelier add + declared-needs checks)
+const ATELIER_RANGE = '^0.13.0'   // the shell version this scaffolder targets (0.13: git-url marketplaces/kits)
 
 function fail(msg) {
   console.error(`create-atelier: ${msg}`)
@@ -84,7 +84,13 @@ if (fs.existsSync(dir) && fs.readdirSync(dir).length > 0) {
  */
 const KIT_OWNER = 'pA1nD'
 const DEFAULT_KIT_REPO = 'pA1nD/atelier-modules'
-const kitRepo = kitSpec ? (kitSpec.includes('/') ? kitSpec : `${KIT_OWNER}/${kitSpec}`) : null
+// a kit is a github <owner/repo> (public tarball) or any git url you can clone
+// (git+ssh://… for private stores — uses your local git auth)
+const isRepoShorthand = (s) => /^[\w.-]+\/[\w.-]+$/.test(s)
+const isGitUrl = (s) => /^(git\+ssh:\/\/|git\+https:\/\/|ssh:\/\/|git@)/.test(s) || /^https?:\/\/.+\.git$/.test(s) || /^file:\/\//.test(s)
+const kitRepo = kitSpec
+  ? (isGitUrl(kitSpec) ? kitSpec.replace(/^git\+/, '') : kitSpec.includes('/') ? kitSpec : `${KIT_OWNER}/${kitSpec}`)
+  : null
 const bareNameRepo = kitRepo || DEFAULT_KIT_REPO
 const isBareName = (s) => /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(s)
 
@@ -104,18 +110,29 @@ const isChromeModule = (dir) => {
   try { return /isChrome\s*:\s*true/.test(fs.readFileSync(path.join(dir, 'frontend.jsx'), 'utf8')) } catch { return false }
 }
 
-const repoRoots = new Map()   // repo → extracted tarball root, downloaded once
+const repoRoots = new Map()   // kit entry → local root, fetched once
 async function fetchRepoRoot(repo) {
   if (repoRoots.has(repo)) return repoRoots.get(repo)
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'create-atelier-repo-'))
-  const url = `https://codeload.github.com/${repo}/tar.gz/HEAD`
-  const res = await fetch(url).catch((e) => fail(`could not reach github.com for ${repo}: ${e.message}`))
-  if (!res.ok) fail(`could not download github.com/${repo} (HTTP ${res.status}) — is it a public repo?`)
-  fs.writeFileSync(path.join(tmp, 'repo.tgz'), Buffer.from(await res.arrayBuffer()))
-  const out = path.join(tmp, 'repo')
-  fs.mkdirSync(out)
-  execFileSync('tar', ['-xzf', path.join(tmp, 'repo.tgz'), '-C', out])
-  const root = path.join(out, fs.readdirSync(out)[0])   // single "<repo>-<ref>" top dir
+  let root
+  if (isRepoShorthand(repo)) {
+    const url = `https://codeload.github.com/${repo}/tar.gz/HEAD`
+    const res = await fetch(url).catch((e) => fail(`could not reach github.com for ${repo}: ${e.message}`))
+    if (!res.ok) fail(`could not download github.com/${repo} (HTTP ${res.status}) — is it a public repo? (private kits work as git urls: git+ssh://…)`)
+    fs.writeFileSync(path.join(tmp, 'repo.tgz'), Buffer.from(await res.arrayBuffer()))
+    const out = path.join(tmp, 'repo')
+    fs.mkdirSync(out)
+    execFileSync('tar', ['-xzf', path.join(tmp, 'repo.tgz'), '-C', out])
+    root = path.join(out, fs.readdirSync(out)[0])   // single "<repo>-<ref>" top dir
+  } else {
+    root = path.join(tmp, 'repo')
+    try {
+      execFileSync('git', ['clone', '--depth', '1', repo, root], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })
+    } catch (e) {
+      const detail = (e.stderr || '').toString().trim().split('\n').slice(-2).join('\n  ')
+      fail(`could not clone ${repo} — check your access (ssh key / credential helper)\n  ${detail}`)
+    }
+  }
   repoRoots.set(repo, root)
   return root
 }
