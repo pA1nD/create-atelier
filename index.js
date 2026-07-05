@@ -22,7 +22,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { execFileSync } from 'node:child_process'
 
-const ATELIER_RANGE = '^0.11.0'   // the shell version this scaffolder targets (0.11 ships `atelier add`)
+const ATELIER_RANGE = '^0.12.0'   // the shell version this scaffolder targets (0.12: atelier add + declared-needs checks)
 
 function fail(msg) {
   console.error(`create-atelier: ${msg}`)
@@ -218,6 +218,7 @@ write('.gitignore', 'node_modules\ndata\n.DS_Store\n')
 // Starter modules land as plain folders — the instance owns them from here on.
 // A module with its own dependencies (chromes usually) gets them installed in
 // place; if that fails the scaffold still stands, so warn instead of dying.
+const binOk = (b) => { try { execFileSync('/bin/sh', ['-c', `command -v ${b}`], { stdio: 'ignore' }); return true } catch { return false } }
 for (const s of starters) {
   fs.cpSync(s.src, path.join(dir, s.id), { recursive: true })
   if (s.hasDeps) {
@@ -227,6 +228,17 @@ for (const s of starters) {
     } catch {
       console.warn(`  ⚠ npm install failed in ${s.id}/ — run it there manually before \`npm run dev\``)
     }
+  }
+  // Report the module's declared system needs (its package.json `atelier`
+  // field) — check-only; `npx atelier add <name> --yes` can run install hints.
+  const a = readPkg(path.join(dir, s.id)).atelier
+  if (a && typeof a === 'object') {
+    const missing = []
+    if (Array.isArray(a.os) && a.os.length && !a.os.includes(process.platform)) missing.push(`targets os [${a.os.join(', ')}] — this machine is ${process.platform}`)
+    for (const [b, hint] of Object.entries(a.bins && typeof a.bins === 'object' ? a.bins : {})) if (/^[A-Za-z0-9._-]+$/.test(b) && !binOk(b)) missing.push(`missing ${b}${hint ? `  →  ${hint}` : ''}`)
+    for (const k of (Array.isArray(a.env) ? a.env : [])) if (!process.env[k]) missing.push(`missing env ${k}`)
+    if (a.note) console.log(`  ${s.id} · note: ${a.note}`)
+    if (missing.length) { console.log(`  ! ${s.id} will run degraded until:`); for (const m of missing) console.log(`    · ${m}`) }
   }
 }
 
