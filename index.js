@@ -1,28 +1,33 @@
 #!/usr/bin/env node
 /* create-atelier — scaffold a new Atelier instance.
  *
- *   npm create @pa1nd/atelier <dir> [-- --chrome <spec>] [--add <spec>]…
- *   npx @pa1nd/create-atelier <dir> [--chrome <spec>] [--add <spec>]…
+ *   npm create @pa1nd/atelier <dir> [-- --kit <collection>] [--chrome <name>] [--add <name>]…
+ *   npx @pa1nd/create-atelier <dir> [--kit <collection>] [--chrome <name>] [--add <name>]…
  *
  * It writes a *tiny* instance — only what the instance needs: a package.json
  * that depends on @pa1nd/atelier (the shell arrives from npm — nothing is
  * vendored), a config, and a .gitignore. Then it prints the commands to run it.
  *
- * Starter kits & modules: --kit pulls a whole kit repo of modules (chrome
- * included, auto-detected); --chrome downloads one chrome module and sets it
- * as the instance's defaultChrome; --add (repeatable) downloads any other
- * module. A bare name resolves against the kit repo (default:
- * github.com/pA1nD/atelier-modules); any other <spec> is handed to
- * `npm pack` — a registry name, a git url, a tarball url, or a local folder.
- * Each lands as a plain folder in the instance (the folder name is the
- * module id); nothing is vendored into the scaffolder itself.
+ * Starter modules come from a COLLECTION — a git repo whose top-level folders
+ * are modules, the one shape atelier shares (`atelier package` produces them).
+ * Scaffolding with one does exactly what `atelier add` would do: the repo is
+ * cloned (in full — its history is what `atelier update` merges against) into
+ * the instance's `_collections/`, and modules are copied out of that mirror
+ * with install provenance. So a scaffolded instance is SUBSCRIBED from day
+ * one: `npx atelier update` and `npx atelier add <collection>` just work.
+ *
+ * --kit pulls every module of the collection (its chrome auto-detected as
+ * defaultChrome); --chrome / --add cherry-pick single modules by name from it
+ * (default collection: github.com/pA1nD/atelier-modules).
  */
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { execFileSync } from 'node:child_process'
 
-const ATELIER_RANGE = '^0.13.0'   // the shell version this scaffolder targets (0.13: git-url marketplaces/kits)
+const ATELIER_RANGE = '^0.15.0'   // the shell version this scaffolder targets (0.15: collections)
+const KIT_OWNER = 'pA1nD'
+const DEFAULT_KIT = 'pA1nD/atelier-modules'
 
 function fail(msg) {
   console.error(`create-atelier: ${msg}`)
@@ -31,29 +36,38 @@ function fail(msg) {
 
 const [target, ...flags] = process.argv.slice(2)
 if (!target || target.startsWith('-')) {
-  fail(`usage: npm create @pa1nd/atelier <dir> [-- --kit <kit>] [--chrome <spec>] [--add <spec>]…
+  fail(`usage: npm create @pa1nd/atelier <dir> [-- --kit <collection>] [--chrome <name>] [--add <name>]…
   e.g.  npm create @pa1nd/atelier my-studio
         npm create @pa1nd/atelier my-studio -- --kit atelier-modules
         npm create @pa1nd/atelier my-studio -- --chrome atelier-chrome --add dock
-  --kit pulls every module of a kit repo (a bare kit name means pA1nD/<kit>).
-  a bare <spec> names one folder of the kit repo (default pA1nD/atelier-modules);
-  anything else (registry name, git url, tarball url, local folder) is fetched via npm.`)
+  --kit pulls every module of a collection — a git repo of module folders, what
+  \`atelier package\` produces. A bare name means github.com/${KIT_OWNER}/<name>;
+  also: owner/repo, github:owner/repo, any git url (git+ssh://… for private
+  collections, over your own git auth), a local path, or a .bundle file.
+  --chrome / --add name single modules of that collection (default: ${DEFAULT_KIT}).`)
 }
 
-let chromeSpec = null
+let chromeName = null
 let kitSpec = null
-const addSpecs = []
+const addNames = []
 for (let i = 0; i < flags.length; i++) {
   if (flags[i] === '--chrome') {
-    if (chromeSpec) fail('only one --chrome (an instance has one default chrome)')
-    chromeSpec = flags[++i] || fail('--chrome needs a <spec>')
+    if (chromeName) fail('only one --chrome (an instance has one default chrome)')
+    chromeName = flags[++i] || fail('--chrome needs a module name')
   } else if (flags[i] === '--add') {
-    addSpecs.push(flags[++i] || fail('--add needs a <spec>'))
+    addNames.push(flags[++i] || fail('--add needs a module name'))
   } else if (flags[i] === '--kit') {
     if (kitSpec) fail('only one --kit')
-    kitSpec = flags[++i] || fail('--kit needs a kit name (e.g. atelier-modules) or owner/repo')
+    kitSpec = flags[++i] || fail('--kit needs a collection (name, owner/repo, git url, path)')
   } else {
     fail(`unknown option: ${flags[i]}`)
+  }
+}
+const isBareName = (s) => /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(s)
+for (const n of [chromeName, ...addNames].filter(Boolean)) {
+  if (!isBareName(n)) {
+    fail(`--chrome/--add take module NAMES from the collection ("${n}" looks like a source).
+  Point --kit at the collection instead:  --kit <owner/repo | git url | path>`)
   }
 }
 
@@ -66,139 +80,78 @@ if (fs.existsSync(dir) && fs.readdirSync(dir).length > 0) {
   fail(`refusing to scaffold into a non-empty directory: ${dir}`)
 }
 
-/* ---- starter kits & modules (--kit / --chrome / --add) ----------------------
- * Fetched BEFORE anything is written, so a bad spec fails with the target
- * directory untouched.
- *
- * A KIT is a github repo of module folders (the first one:
- * github.com/pA1nD/atelier-modules). --kit pulls EVERY module folder in it —
- * same rule as the shell's discovery: a folder with a frontend.jsx or a
- * backend.js — and auto-detects its chrome for `defaultChrome`. A bare --kit
- * name expands to pA1nD/<name>; `owner/repo` names any other kit.
- *
- * A bare --chrome/--add name is a single folder of the kit repo (the default
- * kit when no --kit is given). Any other spec goes to `npm pack` (registry /
- * git / tarball / folder), extracted in a temp dir. Either way the module is
- * later copied into the instance under its name with the scope stripped —
- * the folder name is the module id.
- */
-const KIT_OWNER = 'pA1nD'
-const DEFAULT_KIT_REPO = 'pA1nD/atelier-modules'
-// a kit is a github <owner/repo> (public tarball) or any git url you can clone
-// (git+ssh://… for private stores — uses your local git auth)
-const isRepoShorthand = (s) => /^[\w.-]+\/[\w.-]+$/.test(s)
-const isGitUrl = (s) => /^(git\+ssh:\/\/|git\+https:\/\/|ssh:\/\/|git@)/.test(s) || /^https?:\/\/.+\.git$/.test(s) || /^file:\/\//.test(s)
-const kitRepo = kitSpec
-  ? (isGitUrl(kitSpec) ? kitSpec.replace(/^git\+/, '') : kitSpec.includes('/') ? kitSpec : `${KIT_OWNER}/${kitSpec}`)
-  : null
-const bareNameRepo = kitRepo || DEFAULT_KIT_REPO
-const isBareName = (s) => /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(s)
+/* ---- the collection (--kit / --chrome / --add) --------------------------------
+ * Cloned BEFORE anything is written, so a bad source fails with the target
+ * directory untouched. Always a FULL git clone: the clone becomes the
+ * instance's mirror under _collections/, and its history is the merge base
+ * `atelier update` reasons from.
+ * -------------------------------------------------------------------------------- */
+const isGitUrl = (s) => /^(git\+ssh:\/\/|git\+https:\/\/|ssh:\/\/|git@|file:\/\/)/.test(s) || /^https?:\/\//.test(s)
+const isPathSpec = (s) => /^(\.{1,2}\/|~\/|\/)/.test(s) || s.endsWith('.bundle')
 
-const runNpm = (args, opts = {}) => process.env.npm_execpath
-  ? execFileSync(process.execPath, [process.env.npm_execpath, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts })
-  : execFileSync('npm', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts })
+function cloneUrlFor(spec) {
+  let s = spec
+  if (s.startsWith('github:')) s = s.slice(7)
+  if (isPathSpec(s)) {
+    if (s === '~' || s.startsWith('~/')) s = path.join(process.env.HOME || '', s.slice(2))
+    return path.resolve(process.cwd(), s)
+  }
+  if (isGitUrl(s)) return s.replace(/^git\+/, '')
+  if (/^[\w.-]+\/[\w.-]+$/.test(s)) return `https://github.com/${s}.git`     // owner/repo
+  if (isBareName(s)) return `https://github.com/${KIT_OWNER}/${s}.git`       // bare kit name
+  fail(`"${spec}" isn't a collection source (name, owner/repo, github:owner/repo, git url, path, .bundle)`)
+}
+
+const wantModules = !!(kitSpec || chromeName || addNames.length)
+const collectionUrl = wantModules ? cloneUrlFor(kitSpec || DEFAULT_KIT) : null
+const collectionName = wantModules
+  ? path.basename(collectionUrl).replace(/\.git$/, '').replace(/\.bundle$/, '')
+  : null
+
+// A module folder, by the shell's own discovery rule: frontend.jsx or backend.js.
+const moduleDirs = (root) => fs.readdirSync(root, { withFileTypes: true })
+  .filter((d) => d.isDirectory() && /^[a-zA-Z0-9]/.test(d.name))
+  .map((d) => d.name)
+  .filter((n) => fs.existsSync(path.join(root, n, 'frontend.jsx')) || fs.existsSync(path.join(root, n, 'backend.js')))
 
 const readPkg = (dir) => {
   try { return JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8')) } catch { return {} }
-}
-const hasDeps = (dir) => {
-  const pkg = readPkg(dir)
-  return !!(pkg.dependencies && Object.keys(pkg.dependencies).length)
 }
 // A chrome declares itself in its own frontend.jsx meta — that's the marker.
 const isChromeModule = (dir) => {
   try { return /isChrome\s*:\s*true/.test(fs.readFileSync(path.join(dir, 'frontend.jsx'), 'utf8')) } catch { return false }
 }
 
-const repoRoots = new Map()   // kit entry → local root, fetched once
-async function fetchRepoRoot(repo) {
-  if (repoRoots.has(repo)) return repoRoots.get(repo)
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'create-atelier-repo-'))
-  let root
-  if (isRepoShorthand(repo)) {
-    const url = `https://codeload.github.com/${repo}/tar.gz/HEAD`
-    const res = await fetch(url).catch((e) => fail(`could not reach github.com for ${repo}: ${e.message}`))
-    if (!res.ok) fail(`could not download github.com/${repo} (HTTP ${res.status}) — is it a public repo? (private kits work as git urls: git+ssh://…)`)
-    fs.writeFileSync(path.join(tmp, 'repo.tgz'), Buffer.from(await res.arrayBuffer()))
-    const out = path.join(tmp, 'repo')
-    fs.mkdirSync(out)
-    execFileSync('tar', ['-xzf', path.join(tmp, 'repo.tgz'), '-C', out])
-    root = path.join(out, fs.readdirSync(out)[0])   // single "<repo>-<ref>" top dir
-  } else {
-    root = path.join(tmp, 'repo')
-    try {
-      execFileSync('git', ['clone', '--depth', '1', repo, root], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })
-    } catch (e) {
-      const detail = (e.stderr || '').toString().trim().split('\n').slice(-2).join('\n  ')
-      fail(`could not clone ${repo} — check your access (ssh key / credential helper)\n  ${detail}`)
-    }
-  }
-  repoRoots.set(repo, root)
-  return root
-}
-
-// A module folder, by the shell's own discovery rule: frontend.jsx or backend.js.
-const repoModuleDirs = (root) => fs.readdirSync(root, { withFileTypes: true })
-  .filter((d) => d.isDirectory() && /^[a-zA-Z0-9]/.test(d.name))
-  .map((d) => d.name)
-  .filter((n) => fs.existsSync(path.join(root, n, 'frontend.jsx')) || fs.existsSync(path.join(root, n, 'backend.js')))
-
-async function fetchFromRepo(repo, name) {
-  const root = await fetchRepoRoot(repo)
-  const src = path.join(root, name)
-  if (!fs.existsSync(src)) {
-    fail(`no module "${name}" in github.com/${repo} — available: ${repoModuleDirs(root).join(', ') || '(none)'}`)
-  }
-  return { spec: name, src, id: name, hasDeps: hasDeps(src) }
-}
-
-async function fetchModule(spec) {
-  if (isBareName(spec)) return fetchFromRepo(bareNameRepo, spec)
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'create-atelier-'))
-  let tgz
+let clone = null, cloneHead = null, selected = []
+if (wantModules) {
+  clone = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'create-atelier-')), 'repo')
   try {
-    tgz = runNpm(['pack', spec, '--pack-destination', tmp]).trim().split('\n').pop()
+    execFileSync('git', ['clone', '-q', collectionUrl, clone],
+      { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })
   } catch (e) {
-    const detail = (e.stderr || e.message || '').toString().trim().split('\n').slice(-3).join('\n  ')
-    fail(`could not fetch "${spec}" — not something npm can pack (registry name, git url, tarball url, or folder)\n  ${detail}`)
+    const detail = (e.stderr || '').toString().trim().split('\n').slice(-2).join('\n  ')
+    fail(`could not clone ${collectionUrl} — for private collections check your git access (ssh key / credential helper)\n  ${detail}`)
   }
-  const src = path.join(tmp, 'extracted')
-  fs.mkdirSync(src)
-  execFileSync('tar', ['-xzf', path.join(tmp, tgz), '-C', src, '--strip-components', '1'])
-  const id = (readPkg(src).name || tgz.replace(/\.tgz$/, '')).split('/').pop()
-  return { spec, src, id, hasDeps: hasDeps(src) }
-}
-
-const starters = []
-if (chromeSpec) starters.push({ ...(await fetchModule(chromeSpec)), isChrome: true })
-for (const s of addSpecs) starters.push(await fetchModule(s))
-
-// --kit: pull every module folder in the kit repo. Explicitly-named starters
-// win a name collision; the kit's chrome becomes the default chrome unless
-// --chrome named one.
-if (kitRepo) {
-  const root = await fetchRepoRoot(kitRepo)
-  const kitIds = repoModuleDirs(root)
-  if (!kitIds.length) fail(`kit github.com/${kitRepo} contains no modules (folders with a frontend.jsx or backend.js)`)
-  const taken = new Set(starters.map((s) => s.id))
-  for (const id of kitIds) {
-    if (taken.has(id)) continue
-    const src = path.join(root, id)
-    starters.push({ spec: `${kitRepo}#${id}`, src, id, hasDeps: hasDeps(src), fromKit: true })
+  cloneHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: clone, encoding: 'utf8' }).trim()
+  const offered = moduleDirs(clone)
+  if (!offered.length) fail(`${collectionUrl} is not a collection — its top level has no module folders`)
+  // --chrome/--add cherry-pick by name; --kit alone means the whole collection
+  const named = [...new Set([chromeName, ...addNames].filter(Boolean))]
+  const picks = named.length ? named : offered
+  for (const id of picks) {
+    if (!offered.includes(id)) fail(`no module "${id}" in that collection — it offers: ${offered.join(', ')}`)
+    selected.push({ id, src: path.join(clone, id), isChrome: id === chromeName })
   }
-  if (!chromeSpec) {
-    const kitChromes = starters.filter((s) => s.fromKit && isChromeModule(s.src))
-    if (kitChromes.length === 1) kitChromes[0].isChrome = true
+  // --kit with no explicit --chrome: a single chrome in the kit becomes the default
+  if (!chromeName) {
+    const chromes = selected.filter((s) => isChromeModule(s.src))
+    if (chromes.length === 1) chromes[0].isChrome = true
     // 0 or several: leave defaultChrome unset — the shell's election handles it
   }
 }
+const chrome = selected.find((s) => s.isChrome)
 
-const ids = starters.map((s) => s.id)
-if (new Set(ids).size !== ids.length) {
-  fail(`two starter modules resolve to the same folder name: ${ids.join(', ')}`)
-}
-const chrome = starters.find((s) => s.isChrome)
-
+/* ---- write the instance --------------------------------------------------------- */
 const write = (rel, content) => {
   const p = path.join(dir, rel)
   fs.mkdirSync(path.dirname(p), { recursive: true })
@@ -220,35 +173,63 @@ write('package.json', JSON.stringify({
   },
 }, null, 2) + '\n')
 
-// atelier.config.json — the instance's source of truth. Minimal; every key is optional.
+// atelier.config.json — the instance's source of truth. Minimal; every key is
+// optional. (Subscriptions need no config: the mirror under _collections/ IS
+// the registry — its origin lives in its own .git/config.)
 write('atelier.config.json', JSON.stringify({
   label: name,
   port: 1844,
   ...(chrome ? { defaultChrome: chrome.id } : {}),
-  // the kit repo doubles as the instance's marketplace: `npx atelier add <name>`
-  // resolves bare module names against it (tooling-only — the server ignores it)
-  ...(kitRepo ? { marketplaces: [kitRepo] } : {}),
 }, null, 2) + '\n')
 
-write('.gitignore', 'node_modules\ndata\n.DS_Store\n')
+// _collections holds nested git repos (mirrors + authored collections) — noise
+// inside the instance's own git history; each collection is its own repo.
+write('.gitignore', 'node_modules\ndata\n_collections\n.DS_Store\n')
 
-// Starter modules land as plain folders — the instance owns them from here on.
-// A module with its own dependencies (chromes usually) gets them installed in
-// place; if that fails the scaffold still stands, so warn instead of dying.
+// The clone becomes the instance's mirror: the scaffolded instance is
+// subscribed — `atelier add <collection>` / `atelier update` work from day one.
+if (clone) {
+  fs.cpSync(clone, path.join(dir, '_collections', collectionName), { recursive: true })
+}
+
+/* ---- install the selected modules out of the mirror ------------------------------
+ * Same semantics as `atelier add`: filtered copy (a cut's data/ is
+ * first-install content; node_modules/.git/.env* never travel), npm install
+ * in place when the module declares dependencies, and an `.atelier`
+ * provenance file (collection + mirror commit — the merge base a future
+ * `atelier update` reasons from).
+ * ------------------------------------------------------------------------------------ */
+const runNpm = (args, opts = {}) => process.env.npm_execpath
+  ? execFileSync(process.execPath, [process.env.npm_execpath, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts })
+  : execFileSync('npm', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], ...opts })
 const binOk = (b) => { try { execFileSync('/bin/sh', ['-c', `command -v ${b}`], { stdio: 'ignore' }); return true } catch { return false } }
-for (const s of starters) {
-  fs.cpSync(s.src, path.join(dir, s.id), { recursive: true })
-  if (s.hasDeps) {
+
+for (const s of selected) {
+  const dest = path.join(dir, s.id)
+  fs.cpSync(s.src, dest, {
+    recursive: true,
+    filter: (p) => {
+      const rel = path.relative(s.src, p)
+      if (!rel) return true
+      const top = rel.split(path.sep)[0]
+      return !['node_modules', '.git', '.atelier'].includes(top) && !top.startsWith('.env')
+    },
+  })
+  fs.writeFileSync(path.join(dest, '.atelier'), JSON.stringify({
+    collection: collectionName, module: s.id, commit: cloneHead, installedAt: new Date().toISOString(),
+  }, null, 2) + '\n')
+  const pkg = readPkg(dest)
+  if (pkg.dependencies && Object.keys(pkg.dependencies).length) {
     console.log(`  installing ${s.id} dependencies…`)
     try {
-      runNpm(['install', '--no-fund', '--no-audit', '--loglevel=error'], { cwd: path.join(dir, s.id) })
+      runNpm(['install', '--no-fund', '--no-audit', '--loglevel=error'], { cwd: dest })
     } catch {
       console.warn(`  ⚠ npm install failed in ${s.id}/ — run it there manually before \`npm run dev\``)
     }
   }
   // Report the module's declared system needs (its package.json `atelier`
-  // field) — check-only; `npx atelier add <name> --yes` can run install hints.
-  const a = readPkg(path.join(dir, s.id)).atelier
+  // field) — check-only; `npx atelier add … --yes` can run install hints.
+  const a = pkg.atelier
   if (a && typeof a === 'object') {
     const missing = []
     if (Array.isArray(a.os) && a.os.length && !a.os.includes(process.platform)) missing.push(`targets os [${a.os.join(', ')}] — this machine is ${process.platform}`)
@@ -259,14 +240,14 @@ for (const s of starters) {
   }
 }
 
-
 const major = Number(process.versions.node.split('.')[0])
 const warn = Number.isFinite(major) && major < 24
   ? `\n⚠  Atelier needs Node ≥24 to run — you have ${process.versions.node}. Upgrade before \`npm run dev\`.\n`
   : ''
 
-const started = starters.length
-  ? `\n  starter modules: ${starters.map((s) => s.id + (s.isChrome ? ' (default chrome)' : '')).join(', ')}`
+const started = selected.length
+  ? `\n  subscribed: ${collectionName}   (later: npx atelier update · npx atelier add ${collectionName})
+  starter modules: ${selected.map((s) => s.id + (s.isChrome ? ' (default chrome)' : '')).join(', ')}`
   : ''
 
 console.log(`
