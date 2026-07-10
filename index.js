@@ -25,7 +25,7 @@ import path from 'node:path'
 import os from 'node:os'
 import { execFileSync } from 'node:child_process'
 
-const ATELIER_RANGE = '^0.15.0'   // the shell version this scaffolder targets (0.15: collections)
+const ATELIER_RANGE = '^0.16.0'   // the shell version this scaffolder targets (0.16: installPath, channel/outbox)
 const KIT_OWNER = 'pA1nD'
 const DEFAULT_KIT = 'pA1nD/atelier-modules'
 
